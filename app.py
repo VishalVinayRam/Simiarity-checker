@@ -5,12 +5,22 @@ import os
 from dotenv import load_dotenv
 from pdf2image import convert_from_bytes
 import pytesseract
+import openai
+from openai import ChatCompletion
+
 
 # Load environment variables from .env file.
 load_dotenv()
 
-# Increase maximum upload size in config if needed.
-# (See https://docs.streamlit.io/library/advanced-features/configuration for details.)
+# Set OpenAI API key from environment variable.
+if not openai_api_key:
+    st.error("Please set the OPENAI_API_KEY environment variable in your .env file.")
+openai.api_key = openai_api_key
+
+# =====================================
+# Existing Text Comparison Code
+# =====================================
+
 
 st.title("Universal Text Comparison Tool")
 st.write(
@@ -73,19 +83,19 @@ def generate_diff_html(text1, text2):
 
 # --- File 1 Upload ---
 st.subheader("File 1")
-file1 = st.file_uploader("Upload File 1", type=["pdf", "txt"])
+file1 = st.file_uploader("Upload File 1", type=["pdf", "txt"], key="file1")
 password1 = None
 if file1 is not None and file1.type == "application/pdf":
-    if st.checkbox("File 1 is password protected?"):
-        password1 = st.text_input("Enter password for File 1", type="password")
+    if st.checkbox("File 1 is password protected?", key="pw1"):
+        password1 = st.text_input("Enter password for File 1", type="password", key="pass1")
 
 # --- File 2 Upload ---
 st.subheader("File 2")
-file2 = st.file_uploader("Upload File 2", type=["pdf", "txt"])
+file2 = st.file_uploader("Upload File 2", type=["pdf", "txt"], key="file2")
 password2 = None
 if file2 is not None and file2.type == "application/pdf":
-    if st.checkbox("File 2 is password protected?"):
-        password2 = st.text_input("Enter password for File 2", type="password")
+    if st.checkbox("File 2 is password protected?", key="pw2"):
+        password2 = st.text_input("Enter password for File 2", type="password", key="pass2")
 
 if file1 and file2:
     # Extract text from File 1
@@ -118,3 +128,75 @@ if file1 and file2:
         
         st.subheader("Extracted Text from File 2")
         st.text_area("File 2 Text", text2, height=200)
+
+# =====================================
+# New Chatbot Code
+# =====================================
+
+st.markdown("---")
+st.header("Chatbot Assistant")
+
+# Initialize session state for chatbot if not already present.
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+if "chatbot_open" not in st.session_state:
+    st.session_state.chatbot_open = False
+
+# Button to toggle the chatbot window.
+if st.button("Open Chatbot"):
+    st.session_state.chatbot_open = not st.session_state.chatbot_open
+
+# Chatbot Interface
+if st.session_state.chatbot_open:
+    st.subheader("Chatbot")
+    
+    # Display chat history.
+    for msg in st.session_state.chat_history:
+        if msg["role"] == "user":
+            st.markdown(f"**You:** {msg['content']}")
+        else:
+            st.markdown(f"**Bot:** {msg['content']}")
+
+    # Input area for new messages.
+    user_input = st.text_input("Ask a question or type your message here...", key="chat_input")
+    if st.button("Send", key="send_button") and user_input:
+        # Append the user's message to the history.
+        st.session_state.chat_history.append({"role": "user", "content": user_input})
+        
+        # Prepare messages for OpenAI including a system prompt.
+        messages = [{"role": "system", "content": "You are a helpful assistant that can answer questions and summarize conversations."}]
+        messages.extend(st.session_state.chat_history)
+        
+        # Get the bot's response using the new interface.
+        try:
+            response = ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=messages,
+                max_tokens=150,
+                temperature=0.7,
+            )
+            answer = response.choices[0].message["content"].strip()
+        except Exception as e:
+            answer = f"Error: {e}"
+        st.session_state.chat_history.append({"role": "assistant", "content": answer})
+        st.experimental_rerun()
+    
+    # Button to summarize the conversation.
+    if st.button("Summarize Conversation"):
+        conversation_text = "\n".join([f'{msg["role"].capitalize()}: {msg["content"]}' for msg in st.session_state.chat_history])
+        summary_prompt = f"Summarize the following conversation in a few bullet points:\n\n{conversation_text}"
+        try:
+            summary_response = ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are an expert summarization assistant."},
+                    {"role": "user", "content": summary_prompt}
+                ],
+                max_tokens=100,
+                temperature=0.5,
+            )
+            summary = summary_response.choices[0].message["content"].strip()
+        except Exception as e:
+            summary = f"Error: {e}"
+        st.markdown("### Conversation Summary")
+        st.write(summary)
