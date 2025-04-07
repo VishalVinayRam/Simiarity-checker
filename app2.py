@@ -8,7 +8,7 @@ from transformers import pipeline
 from dotenv import load_dotenv
 
 load_dotenv()  # This loads variables from .env into os.environ
-openai_api_key = "sk--25elGAnH0nP4Ku3Rab4Mg5BLY6wqMDflbkffwAYBpT3BlbkFJAfgIj8BGhKXLJl4At3ciqTdS4cnBH6W6x1-UcAi2YA"
+openai_api_key = os.getenv("OPENAI_API_KEY")
 if not openai_api_key:
     raise ValueError("Please set the OPENAI_API_KEY environment variable in your .env file")
 openai.api_key = openai_api_key
