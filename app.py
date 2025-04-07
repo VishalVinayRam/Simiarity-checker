@@ -1,119 +1,120 @@
 import streamlit as st
 import PyPDF2
 import difflib
-import openai
 import os
+from dotenv import load_dotenv
+from pdf2image import convert_from_bytes
+import pytesseract
 
-# Make sure to install openai: pip install openai
-# Set your OpenAI API key as an environment variable before running the app.
-openai.api_key = os.getenv("sk--25elGAnH0nP4Ku3Rab4Mg5BLY6wqMDflbkffwAYBpT3BlbkFJAfgIj8BGhKXLJl4At3ciqTdS4cnBH6W6x1-UcAi2YA")
+# Load environment variables from .env file.
+load_dotenv()
 
-def extract_text_from_pdf(file):
+# Increase maximum upload size in config if needed.
+# (See https://docs.streamlit.io/library/advanced-features/configuration for details.)
+
+st.title("Universal Text Comparison Tool")
+st.write(
+    "Upload two files (PDFs or text). The tool will extract text (using OCR if scanned) and display differences. "
+    "If the PDF is password-protected, check the box and provide the password."
+)
+
+def extract_text(file, password=None):
     """
-    Extracts text from a PDF file using PyPDF2.
-    If the PDF is scanned (image-based), text extraction may fail.
+    Extract text from a PDF file.
+    - If the file is encrypted, it uses the provided password.
+    - If no text is extracted (e.g., scanned PDF), it performs OCR.
+    Returns a tuple (text, encryption_flag).
     """
     try:
+        file.seek(0)  # reset file pointer
         pdf_reader = PyPDF2.PdfReader(file)
+        if pdf_reader.is_encrypted:
+            if password:
+                pdf_reader.decrypt(password)
+            else:
+                st.warning("File appears to be encrypted. Please provide a password.")
+                return None, True  # Indicate that the file is encrypted
         text = ""
         for page in pdf_reader.pages:
             page_text = page.extract_text()
             if page_text:
                 text += page_text + "\n"
-        return text
+        # If no text found, assume it's scanned and use OCR
+        if not text.strip():
+            st.info("No digital text found. Attempting OCR on scanned document...")
+            file.seek(0)
+            images = convert_from_bytes(file.getvalue())
+            for image in images:
+                text += pytesseract.image_to_string(image) + "\n"
+        return text, False
     except Exception as e:
-        st.error("Failed to extract text. Ensure the PDF is not scanned or image-based.")
-        raise e
+        st.error(f"Error extracting text: {e}")
+        return "", False
 
 def generate_diff_html(text1, text2):
     """
-    Generates an HTML representation of the differences between two texts.
-    - Added lines are highlighted in green.
-    - Removed lines are highlighted in red.
-    - Modification hint lines are highlighted in yellow.
-    
-    Returns the HTML string and counts of additions, deletions, and modifications.
+    Uses difflib to create an HTML diff between two texts.
+    - Additions: green background.
+    - Deletions: red background.
+    - Modification hints: yellow background.
     """
     diff = list(difflib.ndiff(text1.splitlines(), text2.splitlines()))
     html_diff = ""
-    additions = deletions = modifications = 0
-    
     for line in diff:
-        # Lines starting with "+ " indicate additions.
         if line.startswith("+ "):
             html_diff += f'<span style="background-color: #d4fcbc;">{line[2:]}</span><br>'
-            additions += 1
-        # Lines starting with "- " indicate deletions.
         elif line.startswith("- "):
             html_diff += f'<span style="background-color: #fbb6c2;">{line[2:]}</span><br>'
-            deletions += 1
-        # Lines starting with "? " provide modification hints.
         elif line.startswith("? "):
             html_diff += f'<span style="background-color: #fef3b7;">{line[2:]}</span><br>'
-            modifications += 1
         else:
             html_diff += f'{line[2:]}<br>'
-    
-    return html_diff, additions, deletions, modifications
+    return html_diff
 
-def compare_texts_with_llm(text1, text2):
-    """
-    Uses the OpenAI API to semantically compare two texts.
-    The prompt instructs the LLM to analyze the differences and provide
-    a detailed summary highlighting additions, deletions, and modifications.
-    """
-    prompt = f"""
-    You are an expert editor. Compare the following two documents and provide a detailed analysis of their differences.
-    Highlight what has been added, removed, or modified in a clear and concise manner.
+# --- File 1 Upload ---
+st.subheader("File 1")
+file1 = st.file_uploader("Upload File 1", type=["pdf", "txt"])
+password1 = None
+if file1 is not None and file1.type == "application/pdf":
+    if st.checkbox("File 1 is password protected?"):
+        password1 = st.text_input("Enter password for File 1", type="password")
 
-    --- Document 1 ---
-    {text1}
+# --- File 2 Upload ---
+st.subheader("File 2")
+file2 = st.file_uploader("Upload File 2", type=["pdf", "txt"])
+password2 = None
+if file2 is not None and file2.type == "application/pdf":
+    if st.checkbox("File 2 is password protected?"):
+        password2 = st.text_input("Enter password for File 2", type="password")
 
-    --- Document 2 ---
-    {text2}
+if file1 and file2:
+    # Extract text from File 1
+    if file1.type == "application/pdf":
+        text1, enc1 = extract_text(file1, password=password1)
+    else:
+        text1 = file1.getvalue().decode("utf-8")
+        enc1 = False
 
-    Provide your analysis in bullet points.
-    """
-    try:
-        response = openai.Completion.create(
-            engine="text-davinci-003",  # You can change this based on your requirements.
-            prompt=prompt,
-            max_tokens=500,
-            temperature=0.5,
-        )
-        result = response.choices[0].text.strip()
-        return result
-    except Exception as e:
-        return f"Error with LLM comparison: {e}"
+    # Extract text from File 2
+    if file2.type == "application/pdf":
+        text2, enc2 = extract_text(file2, password=password2)
+    else:
+        text2 = file2.getvalue().decode("utf-8")
+        enc2 = False
 
-# Streamlit UI
-st.title("PDF Document Diff Tool with LLM Comparison")
-st.write("Upload two PDF documents to visualize differences and get a semantic comparison from an LLM.")
+    # Warn user if a file is encrypted but no password was provided
+    if enc1:
+        st.info("File 1 is encrypted. Please provide a password above and re-upload the file.")
+    if enc2:
+        st.info("File 2 is encrypted. Please provide a password above and re-upload the file.")
 
-# Allow users to upload two PDFs.
-pdf_file1 = st.file_uploader("Upload PDF 1", type="pdf")
-pdf_file2 = st.file_uploader("Upload PDF 2", type="pdf")
-
-if pdf_file1 and pdf_file2:
-    try:
-        # Extract text from the uploaded PDFs.
-        text1 = extract_text_from_pdf(pdf_file1)
-        text2 = extract_text_from_pdf(pdf_file2)
-        
-        # Traditional diff using difflib.
-        st.subheader("Traditional Diff")
-        diff_html, additions, deletions, modifications = generate_diff_html(text1, text2)
+    if text1 is not None and text2 is not None:
+        st.subheader("Differences")
+        diff_html = generate_diff_html(text1, text2)
         st.markdown(diff_html, unsafe_allow_html=True)
         
-        st.subheader("Summary Report")
-        st.write(f"**Additions:** {additions}")
-        st.write(f"**Deletions:** {deletions}")
-        st.write(f"**Modifications:** {modifications}")
+        st.subheader("Extracted Text from File 1")
+        st.text_area("File 1 Text", text1, height=200)
         
-        # Semantic comparison using LLM.
-        st.subheader("LLM Semantic Comparison")
-        llm_diff = compare_texts_with_llm(text1, text2)
-        st.write(llm_diff)
-        
-    except Exception as e:
-        st.error(f"An error occurred: {e}")
+        st.subheader("Extracted Text from File 2")
+        st.text_area("File 2 Text", text2, height=200)
